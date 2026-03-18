@@ -704,9 +704,9 @@ async function renderShapeSprite(shape, templateMesh, PX) {
   const rows = shape.length;
   const cols = Math.max(...shape.map(r => r.length));
 
-  // Canvas: breedte = cols cellen, hoogte = rows cellen + beetje zijkant zichtbaar
-  const W = Math.ceil(cols * PX * 1.05 + 4);
-  const H = Math.ceil(rows * PX * 1.05 + PX * 0.28);
+  // Canvas exact zo groot als de cellen op het bord
+  const W = cols * PX;
+  const H = rows * PX;
 
   const canvas = document.createElement('canvas');
   canvas.width  = W;
@@ -717,50 +717,45 @@ async function renderShapeSprite(shape, templateMesh, PX) {
   renderer.setPixelRatio(2);
   renderer.outputEncoding = THREE.sRGBEncoding;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.15;
+  renderer.toneMappingExposure = 1.1;
 
   const scene = new THREE.Scene();
 
-  // Verlichting — hoofdlicht van linksboven-voor
-  scene.add(new THREE.AmbientLight(0xfff8f0, 0.75));
-  const keyLight = new THREE.DirectionalLight(0xfff4e0, 2.0);
-  keyLight.position.set(-2, 8, 2);
-  scene.add(keyLight);
-  const fillLight = new THREE.DirectionalLight(0xffeedd, 0.4);
-  fillLight.position.set(3, 3, -2);
-  scene.add(fillLight);
+  // Licht puur van boven + klein fill voor textuur zichtbaarheid
+  scene.add(new THREE.AmbientLight(0xfff8f0, 0.9));
+  const top = new THREE.DirectionalLight(0xfffaf0, 1.4);
+  top.position.set(0, 10, 0);
+  scene.add(top);
+  const side = new THREE.DirectionalLight(0xffeedd, 0.5);
+  side.position.set(-3, 5, 3);
+  scene.add(side);
 
-  // Blender exporteert Y-up. Blokjes langs X (kolom) en Z (rij).
-  // Maar we draaien de hele groep zodat rijen langs -Z lopen (naar voren = naar onder in beeld)
   const group = new THREE.Group();
-
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < (shape[r]||[]).length; c++) {
       if (!shape[r][c]) continue;
       const mesh = templateMesh.clone();
       mesh.material = templateMesh.material.clone();
-      // X = kolom (rechts), Z = rij (naar voren/onder)
       mesh.position.set(c * CELL, 0, r * CELL);
       group.add(mesh);
     }
   }
   scene.add(group);
 
-  // Centeer de groep
+  // Centreer
   const cx = (cols - 1) * CELL / 2;
   const cz = (rows - 1) * CELL / 2;
   group.position.set(-cx, 0, -cz);
 
-  // Camera recht van boven, lichte kanteling naar voren zodat voorkant zijkant zichtbaar
-  // Geen rotatie — camera kijkt langs -Y omlaag, licht kanteltje langs X
+  // Puur top-down camera — recht van boven
   const aspect = W / H;
-  const sz = Math.max(cols, rows) * CELL * 0.56;
-  const cam = new THREE.OrthographicCamera(-sz*aspect, sz*aspect, sz, -sz, 0.001, 2);
-
-  // Recht van boven met klein beetje naar voren gekanteld (zijkant onder-voorkant zichtbaar)
-  cam.position.set(0, 0.3, 0.06);
+  // Frustum precies zo groot als de shape
+  const halfW = cols * CELL / 2;
+  const halfH = rows * CELL / 2;
+  const cam = new THREE.OrthographicCamera(-halfW, halfW, halfH, -halfH, 0.001, 2);
+  cam.position.set(0, 1, 0);
   cam.lookAt(0, 0, 0);
-  cam.up.set(0, 1, 0);
+  cam.up.set(0, 0, -1); // Z-as is "omhoog" in het beeld
   cam.updateProjectionMatrix();
 
   renderer.render(scene, cam);
@@ -1524,19 +1519,24 @@ function renderTray() {
     `;
 
     if (spriteUrl) {
-      // Sprite + SVG groef-overlay in een container
+      const cols = Math.max(...piece.shape.map(r => r.length));
+      const rows = piece.shape.length;
+      // Celgrootte in tray: max 40px per cel zodat het niet te groot wordt
+      const trayPX = Math.min(40, Math.floor(110 / Math.max(cols, rows)));
+      const imgW = cols * trayPX;
+      const imgH = rows * trayPX;
+
       const container = document.createElement('div');
-      container.style.cssText = 'position:relative;display:inline-block;max-width:110px;max-height:90px;';
+      container.style.cssText = `position:relative;display:inline-block;width:${imgW}px;height:${imgH}px;
+        filter: drop-shadow(2px 4px 3px rgba(80,40,10,0.40)) drop-shadow(0 1px 0 rgba(80,40,10,0.25));
+        ${sel ? 'filter: drop-shadow(3px 6px 8px rgba(180,120,40,0.55)) drop-shadow(0 1px 0 rgba(80,40,10,0.3));' : ''}
+      `;
 
       const img = document.createElement('img');
       img.src = spriteUrl;
-      img.style.cssText = 'width:100%;height:auto;display:block;user-select:none;-webkit-user-drag:none;';
+      img.style.cssText = `width:${imgW}px;height:${imgH}px;display:block;user-select:none;-webkit-user-drag:none;`;
       img.draggable = false;
       container.appendChild(img);
-
-      // SVG overlay met dunne cel-lijntjes
-      const gridSvg = buildGridOverlay(piece.shape);
-      if (gridSvg) container.appendChild(gridSvg);
 
       wrap.appendChild(container);
     } else {
@@ -1981,8 +1981,9 @@ function buildGhost(piece) {
   if (spriteUrl) {
     const img = document.createElement('img');
     img.src = spriteUrl;
-    // Breedte = aantal kolommen * celgrootte, zodat het precies past op het bord
-    img.style.cssText = `width:${cols * CS}px;display:block;opacity:0.88;pointer-events:none;`;
+    img.style.cssText = `width:${cols*CS}px;height:${rows*CS}px;display:block;opacity:0.85;pointer-events:none;
+      filter:drop-shadow(2px 4px 4px rgba(60,30,10,0.4));`;
+    img.draggable = false;
     ghost.appendChild(img);
   } else {
     const svg = buildPieceSVG(piece.shape, piece.color, CS, false, false);
