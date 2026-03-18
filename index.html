@@ -700,15 +700,13 @@ function setLoading(msg, pct) {
   document.getElementById('loading-bar').style.width = pct + '%';
 }
 
-async function renderShapeSprite(shape, templateMesh, PX, forBoard) {
+async function renderShapeSprite(shape, templateMesh, PX) {
   const rows = shape.length;
   const cols = Math.max(...shape.map(r => r.length));
 
-  // Voor bord: exact cols×rows pixels zodat het perfect op het grid past
-  // Voor tray: iets ruimer met kleine zijkant zichtbaar
-  const SIDE = forBoard ? 0.08 : 0.18; // hoe veel zijkant zichtbaar (0=puur top)
-  const W = Math.ceil(cols * PX * (1 + SIDE * 0.3));
-  const H = Math.ceil(rows * PX * (1 + SIDE * 0.3) + PX * SIDE * 1.2);
+  // Canvas: breedte = cols cellen, hoogte = rows cellen + beetje zijkant zichtbaar
+  const W = Math.ceil(cols * PX * 1.05 + 4);
+  const H = Math.ceil(rows * PX * 1.05 + PX * 0.28);
 
   const canvas = document.createElement('canvas');
   canvas.width  = W;
@@ -717,43 +715,52 @@ async function renderShapeSprite(shape, templateMesh, PX, forBoard) {
   const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, preserveDrawingBuffer: true });
   renderer.setSize(W, H, false);
   renderer.setPixelRatio(2);
-  renderer.shadowMap.enabled = false;
   renderer.outputEncoding = THREE.sRGBEncoding;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.15;
 
   const scene = new THREE.Scene();
 
-  // Verlichting — voor top-down vooral van boven
-  scene.add(new THREE.AmbientLight(0xfff8f0, 0.8));
-  const key = new THREE.DirectionalLight(0xfff4e0, 1.8);
-  key.position.set(-1, 10, 1);
-  scene.add(key);
-  const fill = new THREE.DirectionalLight(0xffe8cc, 0.4);
-  fill.position.set(2, 4, -1);
-  scene.add(fill);
+  // Verlichting — hoofdlicht van linksboven-voor
+  scene.add(new THREE.AmbientLight(0xfff8f0, 0.75));
+  const keyLight = new THREE.DirectionalLight(0xfff4e0, 2.0);
+  keyLight.position.set(-2, 8, 2);
+  scene.add(keyLight);
+  const fillLight = new THREE.DirectionalLight(0xffeedd, 0.4);
+  fillLight.position.set(3, 3, -2);
+  scene.add(fillLight);
 
-  const cx = (cols - 1) * CELL / 2;
-  const cz = (rows - 1) * CELL / 2;
+  // Blender exporteert Y-up. Blokjes langs X (kolom) en Z (rij).
+  // Maar we draaien de hele groep zodat rijen langs -Z lopen (naar voren = naar onder in beeld)
+  const group = new THREE.Group();
 
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < (shape[r]||[]).length; c++) {
       if (!shape[r][c]) continue;
       const mesh = templateMesh.clone();
       mesh.material = templateMesh.material.clone();
+      // X = kolom (rechts), Z = rij (naar voren/onder)
       mesh.position.set(c * CELL, 0, r * CELL);
-      scene.add(mesh);
+      group.add(mesh);
     }
   }
+  scene.add(group);
 
-  // Camera: bijna puur van boven, klein hoekje zodat zijkant net zichtbaar is
+  // Centeer de groep
+  const cx = (cols - 1) * CELL / 2;
+  const cz = (rows - 1) * CELL / 2;
+  group.position.set(-cx, 0, -cz);
+
+  // Camera recht van boven, lichte kanteling naar voren zodat voorkant zijkant zichtbaar
+  // Geen rotatie — camera kijkt langs -Y omlaag, licht kanteltje langs X
   const aspect = W / H;
-  const sz = Math.max(cols, rows) * CELL * 0.58;
+  const sz = Math.max(cols, rows) * CELL * 0.56;
   const cam = new THREE.OrthographicCamera(-sz*aspect, sz*aspect, sz, -sz, 0.001, 2);
 
-  // SIDE=0 = puur top-down, SIDE=0.18 = klein hoekje voor diepte
-  cam.position.set(cx - SIDE * 0.08, 0.3, cz - SIDE * 0.06);
-  cam.lookAt(cx, 0, cz);
+  // Recht van boven met klein beetje naar voren gekanteld (zijkant onder-voorkant zichtbaar)
+  cam.position.set(0, 0.3, 0.06);
+  cam.lookAt(0, 0, 0);
+  cam.up.set(0, 1, 0);
   cam.updateProjectionMatrix();
 
   renderer.render(scene, cam);
