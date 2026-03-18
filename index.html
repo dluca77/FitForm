@@ -700,13 +700,15 @@ function setLoading(msg, pct) {
   document.getElementById('loading-bar').style.width = pct + '%';
 }
 
-async function renderShapeSprite(shape, templateMesh, PX) {
+async function renderShapeSprite(shape, templateMesh, PX, forBoard) {
   const rows = shape.length;
   const cols = Math.max(...shape.map(r => r.length));
 
-  // Canvas — meer van boven = minder breedte nodig, iets meer hoogte
-  const W = Math.ceil(cols * PX * 1.15 + PX * 0.6);
-  const H = Math.ceil(rows * PX * 0.75 + PX * 0.65);
+  // Voor bord: exact cols×rows pixels zodat het perfect op het grid past
+  // Voor tray: iets ruimer met kleine zijkant zichtbaar
+  const SIDE = forBoard ? 0.08 : 0.18; // hoe veel zijkant zichtbaar (0=puur top)
+  const W = Math.ceil(cols * PX * (1 + SIDE * 0.3));
+  const H = Math.ceil(rows * PX * (1 + SIDE * 0.3) + PX * SIDE * 1.2);
 
   const canvas = document.createElement('canvas');
   canvas.width  = W;
@@ -714,53 +716,43 @@ async function renderShapeSprite(shape, templateMesh, PX) {
 
   const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, preserveDrawingBuffer: true });
   renderer.setSize(W, H, false);
-  renderer.setPixelRatio(window.devicePixelRatio || 2);
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.setPixelRatio(2);
+  renderer.shadowMap.enabled = false;
   renderer.outputEncoding = THREE.sRGBEncoding;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.2;
+  renderer.toneMappingExposure = 1.15;
 
   const scene = new THREE.Scene();
 
-  // Verlichting — licht van linksboven
-  scene.add(new THREE.AmbientLight(0xfff8f0, 0.7));
-  const key = new THREE.DirectionalLight(0xfff4e0, 2.2);
-  key.position.set(-3, 10, 2);
-  key.castShadow = true;
+  // Verlichting — voor top-down vooral van boven
+  scene.add(new THREE.AmbientLight(0xfff8f0, 0.8));
+  const key = new THREE.DirectionalLight(0xfff4e0, 1.8);
+  key.position.set(-1, 10, 1);
   scene.add(key);
-  const fill = new THREE.DirectionalLight(0xddeeff, 0.35);
-  fill.position.set(4, 3, -2);
+  const fill = new THREE.DirectionalLight(0xffe8cc, 0.4);
+  fill.position.set(2, 4, -1);
   scene.add(fill);
 
   const cx = (cols - 1) * CELL / 2;
   const cz = (rows - 1) * CELL / 2;
 
-  // Blokjes positioneren — met subtiele groef ertussen
-  const GAP = CELL * 0.04; // 4% groef tussen blokjes
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < (shape[r]||[]).length; c++) {
       if (!shape[r][c]) continue;
       const mesh = templateMesh.clone();
       mesh.material = templateMesh.material.clone();
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      // Kleine gap tussen blokjes zodat groef zichtbaar is
-      mesh.position.set(c * (CELL + GAP), 0, r * (CELL + GAP));
-      // Blokje iets schalen zodat de gap zichtbaar blijft
-      mesh.scale.set(0.96, 1, 0.96);
+      mesh.position.set(c * CELL, 0, r * CELL);
       scene.add(mesh);
     }
   }
 
-  // Camera meer van boven: hoge Y, kleine X/Z offset
+  // Camera: bijna puur van boven, klein hoekje zodat zijkant net zichtbaar is
   const aspect = W / H;
-  const sz = Math.max(cols, rows) * CELL * 0.62;
+  const sz = Math.max(cols, rows) * CELL * 0.58;
   const cam = new THREE.OrthographicCamera(-sz*aspect, sz*aspect, sz, -sz, 0.001, 2);
 
-  // Bijna recht van boven, lichte isometrische helling zodat zijkant nog net zichtbaar is
-  const d = 0.18;
-  cam.position.set(cx - d * 0.5, d * 1.8, cz - d * 0.4);
+  // SIDE=0 = puur top-down, SIDE=0.18 = klein hoekje voor diepte
+  cam.position.set(cx - SIDE * 0.08, 0.3, cz - SIDE * 0.06);
   cam.lookAt(cx, 0, cz);
   cam.updateProjectionMatrix();
 
@@ -808,17 +800,22 @@ async function init3D() {
   for (const def of SHAPE_DEFS) {
     const key = shapeKey(def.shape);
 
-    // Tray sprite (~90px streefgrootte)
+    // Tray sprite — klein beetje hoek voor diepte gevoel
     const longest = Math.max(def.shape.length, Math.max(...def.shape.map(r=>r.length)));
     const pxTray  = Math.max(16, Math.round(80 / longest));
-    const trayUrl = await renderShapeSprite(def.shape, templateMesh, pxTray);
+    const trayUrl = await renderShapeSprite(def.shape, templateMesh, pxTray, false);
     window.PIECE_SPRITES[key + '_tray'] = trayUrl;
     done++;
 
-    // Board sprite (44px per cel = board cel grootte)
-    const boardUrl = await renderShapeSprite(def.shape, templateMesh, 44);
+    // Board sprite — puur top-down zodat het exact op grid past
+    const boardUrl = await renderShapeSprite(def.shape, templateMesh, 44, true);
     window.PIECE_SPRITES[key + '_board'] = boardUrl;
     done++;
+
+    const pct = Math.round(5 + (done / total) * 90);
+    setLoading(`Vormen renderen... ${done}/${total}`, pct);
+    await new Promise(r => requestAnimationFrame(r));
+  }
 
     const pct = Math.round(5 + (done / total) * 90);
     setLoading(`Vormen renderen... ${done}/${total}`, pct);
@@ -1177,17 +1174,18 @@ function renderPlacedPiecesSVG(lv, rows, cols, CS) {
     board.style.position = 'relative';
 
     if (spriteUrl) {
-      // 3D sprite als overlay
+      // Board sprite exact op cel-positie plaatsen
       const img = document.createElement('img');
       img.src = spriteUrl;
       img.style.cssText = `
         position: absolute;
-        left: ${padPx + minC * CS - CS * 0.15}px;
-        top:  ${padPx + minR * CS - CS * 0.35}px;
-        width: ${(shapeCols + shapeRows * 0.65) * CS * 1.0}px;
+        left: ${padPx + minC * CS}px;
+        top:  ${padPx + minR * CS}px;
+        width: ${shapeCols * CS}px;
+        height: ${shapeRows * CS}px;
+        object-fit: fill;
         pointer-events: none;
         z-index: 3;
-        object-fit: contain;
       `;
       board.appendChild(img);
     } else {
